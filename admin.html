@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel learning</title>
+    <!-- Bootstrap 5 Dark Theme -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Firebase SDK (modular) -->
+    <script type="module">
+        // Import Firebase modules
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getFirestore, collection, doc, getDoc, getDocs, addDoc, updateDoc, deleteDoc, query, where, orderBy, Timestamp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+        import { getStorage, ref, uploadBytes, getDownloadURL } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js';
+
+        // Firebase config (replace with your own)
+        const firebaseConfig = {
+            apiKey: "AIzaSyDmwtPoZuKgEBc_lgIDMoBHF1ZwObhAnl8",
+            authDomain: "phunlocker-c6fc4.firebaseapp.com",
+            projectId: "phunlocker-c6fc4",
+            storageBucket: "phunlocker-c6fc4.firebasestorage.app",
+            messagingSenderId: "616452799409",
+            appId: "1:616452799409:web:2bbb5fb74c96cbbb571b90"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const storage = getStorage(app);
+
+        // Global state
+        let currentUser = null;
+        let currentUserRole = null;
+        let currentSection = 'dashboard';
+
+        // DOM elements
+        const loginContainer = document.getElementById('loginContainer');
+        const adminContainer = document.getElementById('adminContainer');
+        const loginForm = document.getElementById('loginForm');
+        const loginError = document.getElementById('loginError');
+        const logoutBtn = document.getElementById('logoutBtn');
+        const navLinks = document.querySelectorAll('.nav-link[data-section]');
+        const sections = document.querySelectorAll('.section');
+
+        // Check auth state
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                // Check if user is admin
+                const userDoc = await getDoc(doc(db, 'users', user.uid));
+                if (userDoc.exists() && userDoc.data().role === 'admin') {
+                    currentUser = user;
+                    currentUserRole = 'admin';
+                    showAdminPanel();
+                    loadDashboardData();
+                } else {
+                    // Not admin, sign out
+                    await signOut(auth);
+                    showLogin('Access denied. Admin only.');
+                }
+            } else {
+                showLogin();
+            }
+        });
+
+        // Show login form, hide admin panel
+        function showLogin(message = '') {
+            loginContainer.style.display = 'flex';
+            adminContainer.style.display = 'none';
+            if (message) loginError.textContent = message;
+        }
+
+        // Show admin panel, hide login
+        function showAdminPanel() {
+            loginContainer.style.display = 'none';
+            adminContainer.style.display = 'block';
+            // Load default section
+            showSection('dashboard');
+        }
+
+        // Handle login
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+            } catch (error) {
+                loginError.textContent = error.message;
+            }
+        });
+
+        // Logout
+        logoutBtn.addEventListener('click', async () => {
+            await signOut(auth);
+        });
+
+        // Navigation
+        navLinks.forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const section = link.dataset.section;
+                showSection(section);
+            });
+        });
+
+        function showSection(sectionId) {
+            sections.forEach(s => s.style.display = 'none');
+            document.getElementById(`section-${sectionId}`).style.display = 'block';
+            // Update active nav
+            navLinks.forEach(l => l.classList.remove('active'));
+            document.querySelector(`.nav-link[data-section="${sectionId}"]`).classList.add('active');
+            currentSection = sectionId;
+            // Load section data if needed
+            if (sectionId === 'dashboard') loadDashboardData();
+            if (sectionId === 'courses') loadCourses();
+            if (sectionId === 'software') loadSoftware();
+            if (sectionId === 'orders') loadOrders();
+            if (sectionId === 'users') loadUsers();
+        }
+
+        // ==================== DASHBOARD ====================
+        async function loadDashboardData() {
+            // Fetch stats
+            const usersSnapshot = await getDocs(collection(db, 'users'));
+            const totalUsers = usersSnapshot.size;
+            const activeUsers = usersSnapshot.docs.filter(d => d.data().status === 'active').length;
+
+            const ordersSnapshot = await getDocs(collection(db, 'orders'));
+            const today = new Date();
+            today.setHours(0,0,0,0);
+            const todayOrders = ordersSnapshot.docs.filter(d => d.data().createdAt.toDate() >= today);
+            const todaySales = todayOrders.reduce((sum, o) => sum + (o.data().total || 0), 0);
+
+            const paymentsSnapshot = await getDocs(collection(db, 'payments'));
+            const monthlyRevenue = paymentsSnapshot.docs
+                .filter(d => d.data().status === 'completed' && d.data().createdAt.toDate() >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))
+                .reduce((sum, p) => sum + p.data().amount, 0);
+
+            const pendingPayments = paymentsSnapshot.docs.filter(d => d.data().status === 'pending').length;
+
+            document.getElementById('totalUsers').textContent = totalUsers;
+            document.getElementById('activeUsers').textContent = activeUsers;
+            document.getElementById('todaySales').textContent = `$${todaySales.toFixed(2)}`;
+            document.getElementById('monthlyRevenue').textContent = `$${monthlyRevenue.toFixed(2)}`;
+            document.getElementById('pendingPayments').textContent = pendingPayments;
+
+            // Recent orders
+            const recentOrdersQuery = query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(5));
+            const recentOrdersSnap = await getDocs(recentOrdersQuery);
+            const recentOrdersHtml = recentOrdersSnap.docs.map(doc => {
+                const data = doc.data();
+                return `<tr>
+                    <td>${doc.id}</td>
+                    <td>${data.userId}</td>
+                    <td>$${data.total.toFixed(2)}</td>
+                    <td>${data.status}</td>
+                    <td>${data.createdAt.toDate().toLocaleString()}</td>
+                </tr>`;
+            }).join('');
+            document.getElementById('recentOrdersBody').innerHTML = recentOrdersHtml;
+
+            // Charts (simplified sample data)
+            const ctxSales = document.getElementById('salesChart').getContext('2d');
+            new Chart(ctxSales, {
+                type: 'line',
+                data: {
+                    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                    datasets: [{
+                        label: 'Sales',
+                        data: [12, 19, 3, 5, 2, 3, 9],
+                        borderColor: '#00e5ff',
+                        backgroundColor: 'rgba(0,229,255,0.1)',
+                    }]
+                },
+                options: { responsive: true }
+            });
+
+            const ctxUsers = document.getElementById('usersChart').getContext('2d');
+            new Chart(ctxUsers, {
+                type: 'bar',
+                data: {
+                    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'],
+                    datasets: [{
+                        label: 'Registrations',
+                        data: [5, 10, 15, 10, 20, 25],
+                        backgroundColor: '#00e5ff',
+                    }]
+                }
+            });
+        }
+
+        // ==================== COURSES ====================
+        let currentCourseId = null;
+
+        async function loadCourses() {
+            const coursesSnapshot = await getDocs(collection(db, 'courses'));
+            const coursesHtml = coursesSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return `<tr>
+                    <td>${doc.id}</td>
+                    <td>${data.title}</td>
+                    <td>$${data.price}</td>
+                    <td>${data.discount || 0}%</td>
+                    <td>
+                        <button class="btn btn-sm btn-neon" onclick="editCourse('${doc.id}')">Edit</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteCourse('${doc.id}')">Delete</button>
+                    </td>
+                </tr>`;
+            }).join('');
+            document.getElementById('coursesTableBody').innerHTML = coursesHtml;
+        }
+
+        window.editCourse = async (id) => {
+            const docRef = doc(db, 'courses', id);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                document.getElementById('courseId').value = id;
+                document.getElementById('courseTitle').value = data.title;
+                document.getElementById('courseDescription').value = data.description;
+                document.getElementById('coursePrice').value = data.price;
+                document.getElementById('courseDiscount').value = data.discount || '';
+                document.getElementById('courseThumbnail').value = data.thumbnail || '';
+                // Show modal
+                const modal = new bootstrap.Modal(document.getElementById('courseModal'));
+                modal.show();
+            }
+        };
+
+        window.deleteCourse = async (id) => {
+            if (confirm('Are you sure?')) {
+                await deleteDoc(doc(db, 'courses', id));
+                loadCourses();
+            }
+        };
+
+        document.getElementById('courseForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const id = document.getElementById('courseId').value;
+            const data = {
+                title: document.getElementById('courseTitle').value,
+                description: document.getElementById('courseDescription').value,
+                price: parseFloat(document.getElementById('coursePrice').value),
+                discount: document.getElementById('courseDiscount').value ? parseFloat(document.getElementById('courseDiscount').value) : 0,
+                thumbnail: document.getElementById('courseThumbnail').value,
+                updatedAt: Timestamp.now()
+            };
+            if (id) {
+                await updateDoc(doc(db, 'courses', id), data);
+            } else {
+                data.createdAt = Timestamp.now();
+                await addDoc(collection(db, 'courses'), data);
+            }
+            bootstrap.Modal.getInstance(document.getElementById('courseModal')).hide();
+            loadCourses();
+        });
+
+        document.getElementById('addCourseBtn').addEventListener('click', () => {
+            document.getElementById('courseId').value = '';
+            document.getElementById('courseForm').reset();
+        });
+
+        // ==================== SOFTWARE ====================
+        async function loadSoftware() {
+            const softwareSnapshot = await getDocs(collection(db, 'software'));
+            const softwareHtml = softwareSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return `<tr>
+                    <td>${doc.id}</td>
+                    <td>${data.title}</td>
+                    <td>$${data.price}</td>
+                    <td>${data.version}</td>
+                    <td>
+                        <button class="btn btn-sm btn-neon" onclick="editSoftware('${doc.id}')">Edit</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteSoftware('${doc.id}')">Delete</button>
+                    </td>
+                </tr>`;
+            }).join('');
+            document.getElementById('softwareTableBody').innerHTML = softwareHtml;
+        }
+
+        window.editSoftware = async (id) => {
+            const docRef = doc(db, 'software', id);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                document.getElementById('softwareId').value = id;
+                document.getElementById('softwareTitle').value = data.title;
+                document.getElementById('softwareDescription').value = data.description;
+                document.getElementById('softwarePrice').value = data.price;
+                document.getElementById('softwareVersion').value = data.version;
+                document.getElementById('softwareLicenseType').value = data.licenseType || 'single';
+                // Show modal
+                const modal = new bootstrap.Modal(document.getElementById('softwareModal'));
+                modal.show();
+            }
+        };
+
+        window.deleteSoftware = async (id) => {
+            if (confirm('Are you sure?')) {
+                await deleteDoc(doc(db, 'software', id));
+                loadSoftware();
+            }
+        };
+
+        document.getElementById('softwareForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const id = document.getElementById('softwareId').value;
+            const data = {
+                title: document.getElementById('softwareTitle').value,
+                description: document.getElementById('softwareDescription').value,
+                price: parseFloat(document.getElementById('softwarePrice').value),
+                version: document.getElementById('softwareVersion').value,
+                licenseType: document.getElementById('softwareLicenseType').value,
+                updatedAt: Timestamp.now()
+            };
+            // Handle file upload if any
+            const fileInput = document.getElementById('softwareFile');
+            if (fileInput.files.length > 0) {
+                const file = fileInput.files[0];
+                const storageRef = ref(storage, `software/${Date.now()}_${file.name}`);
+                await uploadBytes(storageRef, file);
+                data.fileURL = await getDownloadURL(storageRef);
+                data.filename = file.name;
+            }
+            if (id) {
+                await updateDoc(doc(db, 'software', id), data);
+            } else {
+                data.createdAt = Timestamp.now();
+                await addDoc(collection(db, 'software'), data);
+            }
+            bootstrap.Modal.getInstance(document.getElementById('softwareModal')).hide();
+            loadSoftware();
+        });
+
+        document.getElementById('addSoftwareBtn').addEventListener('click', () => {
+            document.getElementById('softwareId').value = '';
+            document.getElementById('softwareForm').reset();
+        });
+
+        // ==================== ORDERS ====================
+        async function loadOrders() {
+            const ordersSnapshot = await getDocs(collection(db, 'orders'));
+            const ordersHtml = ordersSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return `<tr>
+                    <td>${doc.id}</td>
+                    <td>${data.userId}</td>
+                    <td>$${data.total.toFixed(2)}</td>
+                    <td>${data.status}</td>
+                    <td>${data.createdAt.toDate().toLocaleString()}</td>
+                    <td>
+                        ${data.status === 'pending' ? `<button class="btn btn-sm btn-success" onclick="approveOrder('${doc.id}')">Approve</button>` : ''}
+                        <button class="btn btn-sm btn-info" onclick="viewOrder('${doc.id}')">View</button>
+                    </td>
+                </tr>`;
+            }).join('');
+            document.getElementById('ordersTableBody').innerHTML = ordersHtml;
+        }
+
+        window.approveOrder = async (orderId) => {
+            // Update order status to completed, create licenses for items
+            const orderRef = doc(db, 'orders', orderId);
+            const orderSnap = await getDoc(orderRef);
+            if (orderSnap.exists()) {
+                const orderData = orderSnap.data();
+                await updateDoc(orderRef, { status: 'completed' });
+                // For each item, create a license
+                for (const item of orderData.items) {
+                    const licenseData = {
+                        userId: orderData.userId,
+                        productId: item.id,
+                        productType: item.type,
+                        licenseKey: generateLicenseKey(),
+                        status: 'active',
+                        createdAt: Timestamp.now()
+                    };
+                    await addDoc(collection(db, 'licenses'), licenseData);
+                }
+                loadOrders();
+            }
+        };
+
+        function generateLicenseKey() {
+            return 'LIC-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+        }
+
+        window.viewOrder = (orderId) => {
+            // Show order details modal
+            alert('Order details: ' + orderId);
+        };
+
+        // ==================== USERS ====================
+        async function loadUsers() {
+            const usersSnapshot = await getDocs(collection(db, 'users'));
+            const usersHtml = usersSnapshot.docs.map(doc => {
+                const data = doc.data();
+                return `<tr>
+                    <td>${doc.id}</td>
+                    <td>${data.name}</td>
+                    <td>${data.email}</td>
+                    <td>${data.role || 'user'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-neon" onclick="editUser('${doc.id}')">Edit</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteUser('${doc.id}')">Delete</button>
+                    </td>
+                </tr>`;
+            }).join('');
+            document.getElementById('usersTableBody').innerHTML = usersHtml;
+        }
+
+        window.editUser = async (id) => {
+            const docRef = doc(db, 'users', id);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                document.getElementById('userId').value = id;
+                document.getElementById('userName').value = data.name;
+                document.getElementById('userEmail').value = data.email;
+                document.getElementById('userRole').value = data.role || 'user';
+                // Show modal
+                const modal = new bootstrap.Modal(document.getElementById('userModal'));
+                modal.show();
+            }
+        };
+
+        window.deleteUser = async (id) => {
+            if (confirm('Are you sure?')) {
+                await deleteDoc(doc(db, 'users', id));
+                loadUsers();
+            }
+        };
+
+        document.getElementById('userForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const id = document.getElementById('userId').value;
+            const data = {
+                name: document.getElementById('userName').value,
+                email: document.getElementById('userEmail').value,
+                role: document.getElementById('userRole').value,
+                updatedAt: Timestamp.now()
+            };
+            if (id) {
+                await updateDoc(doc(db, 'users', id), data);
+            } else {
+                // Create new user? Usually registration handles that.
+            }
+            bootstrap.Modal.getInstance(document.getElementById('userModal')).hide();
+            loadUsers();
+        });
+
+        // Expose functions to global for onclick
+        window.loadDashboardData = loadDashboardData;
+        window.loadCourses = loadCourses;
+        window.loadSoftware = loadSoftware;
+        window.loadOrders = loadOrders;
+        window.loadUsers = loadUsers;
+    </script>
+    <style>
+        body {
+            background: #0a0e1a;
+            color: #e0e0e0;
+            font-family: 'Inter', sans-serif;
+        }
+        .sidebar {
+            background: #141b2b;
+            min-height: 100vh;
+        }
+        .sidebar a {
+            color: #b0b7c4;
+            text-decoration: none;
+            padding: 12px 20px;
+            display: block;
+            transition: 0.3s;
+        }
+        .sidebar a:hover, .sidebar a.active {
+            background: #1f2a40;
+            color: #00e5ff;
+        }
+        .card {
+            background: #1f2a40;
+            border: none;
+            border-radius: 10px;
+        }
+        .card-title {
+            color: #00e5ff;
+        }
+        .stat {
+            color: #00e5ff;
+            font-size: 2rem;
+        }
+        .btn-neon {
+            background: transparent;
+            border: 1px solid #00e5ff;
+            color: #00e5ff;
+        }
+        .btn-neon:hover {
+            background: #00e5ff;
+            color: #0a0e1a;
+        }
+        .table {
+            color: #e0e0e0;
+        }
+        .table-dark {
+            background-color: #1f2a40;
+        }
+        .modal-content {
+            background: #141b2b;
+            color: #e0e0e0;
+        }
+        .form-control, .form-select {
+            background: #1f2a40;
+            border: 1px solid #2a3a5a;
+            color: #fff;
+        }
+        .form-control:focus, .form-select:focus {
+            background: #1f2a40;
+            border-color: #00e5ff;
+            box-shadow: 0 0 0 0.2rem rgba(0,229,255,0.25);
+        }
+        #loginContainer {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        .login-card {
+            background: #141b2b;
+            border: 1px solid #2a3a5a;
+            border-radius: 15px;
+            width: 100%;
+            max-width: 400px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Login Container -->
+    <div id="loginContainer" style="display: none;">
+        <div class="login-card p-4">
+            <h2 class="text-center text-info mb-4">Admin Login</h2>
+            <form id="loginForm">
+                <div class="mb-3">
+                    <label for="email" class="form-label">Email</label>
+                    <input type="email" class="form-control" id="email" required>
+                </div>
+                <div class="mb-3">
+                    <label for="password" class="form-label">Password</label>
+                    <input type="password" class="form-control" id="password" required>
+                </div>
+                <div id="loginError" class="text-danger mb-2"></div>
+                <button type="submit" class="btn btn-neon w-100">Login</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Admin Container -->
+    <div id="adminContainer" style="display: none;">
+        <div class="container-fluid">
+            <div class="row">
+                <!-- Sidebar -->
+                <div class="col-md-2 p-0 sidebar">
+                    <div class="p-3">
+                        <h4 class="text-center text-info">Admin</h4>
+                    </div>
+                    <nav class="nav flex-column">
+                        <a class="nav-link" href="#" data-section="dashboard"><i class="fas fa-tachometer-alt me-2"></i>Dashboard</a>
+                        <a class="nav-link" href="#" data-section="courses"><i class="fas fa-book me-2"></i>Courses</a>
+                        <a class="nav-link" href="#" data-section="software"><i class="fas fa-code me-2"></i>Software</a>
+                        <a class="nav-link" href="#" data-section="orders"><i class="fas fa-shopping-cart me-2"></i>Orders</a>
+                        <a class="nav-link" href="#" data-section="users"><i class="fas fa-users me-2"></i>Users</a>
+                        <a class="nav-link" href="#" id="logoutBtn"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
+                    </nav>
+                </div>
+                <!-- Main Content -->
+                <div class="col-md-10 p-4">
+                    <!-- Dashboard Section -->
+                    <div id="section-dashboard" class="section" style="display: none;">
+                        <h2>Dashboard</h2>
+                        <div class="row mt-4">
+                            <div class="col-md-3">
+                                <div class="card p-3">
+                                    <div class="card-title">Total Users</div>
+                                    <div class="stat" id="totalUsers">0</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card p-3">
+                                    <div class="card-title">Active Users</div>
+                                    <div class="stat" id="activeUsers">0</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card p-3">
+                                    <div class="card-title">Today Sales</div>
+                                    <div class="stat" id="todaySales">$0</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card p-3">
+                                    <div class="card-title">Monthly Revenue</div>
+                                    <div class="stat" id="monthlyRevenue">$0</div>
+                                </div>
+                            </div>
+                            <div class="col-md-3 mt-3">
+                                <div class="card p-3">
+                                    <div class="card-title">Pending Payments</div>
+                                    <div class="stat" id="pendingPayments">0</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row mt-4">
+                            <div class="col-md-6">
+                                <div class="card p-3">
+                                    <canvas id="salesChart"></canvas>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card p-3">
+                                    <canvas id="usersChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row mt-4">
+                            <div class="col-md-12">
+                                <div class="card p-3">
+                                    <h5>Recent Orders</h5>
+                                    <table class="table table-dark table-hover">
+                                        <thead>
+                                            <tr><th>ID</th><th>User</th><th>Amount</th><th>Status</th><th>Date</th></tr>
+                                        </thead>
+                                        <tbody id="recentOrdersBody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Courses Section -->
+                    <div id="section-courses" class="section" style="display: none;">
+                        <h2>Courses</h2>
+                        <button class="btn btn-neon mb-3" id="addCourseBtn" data-bs-toggle="modal" data-bs-target="#courseModal">Add Course</button>
+                        <div class="card p-3">
+                            <table class="table table-dark">
+                                <thead>
+                                    <tr><th>ID</th><th>Title</th><th>Price</th><th>Discount</th><th>Actions</th></tr>
+                                </thead>
+                                <tbody id="coursesTableBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Software Section -->
+                    <div id="section-software" class="section" style="display: none;">
+                        <h2>Software</h2>
+                        <button class="btn btn-neon mb-3" id="addSoftwareBtn" data-bs-toggle="modal" data-bs-target="#softwareModal">Add Software</button>
+                        <div class="card p-3">
+                            <table class="table table-dark">
+                                <thead>
+                                    <tr><th>ID</th><th>Title</th><th>Price</th><th>Version</th><th>Actions</th></tr>
+                                </thead>
+                                <tbody id="softwareTableBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Orders Section -->
+                    <div id="section-orders" class="section" style="display: none;">
+                        <h2>Orders</h2>
+                        <div class="card p-3">
+                            <table class="table table-dark">
+                                <thead>
+                                    <tr><th>ID</th><th>User</th><th>Total</th><th>Status</th><th>Date</th><th>Actions</th></tr>
+                                </thead>
+                                <tbody id="ordersTableBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Users Section -->
+                    <div id="section-users" class="section" style="display: none;">
+                        <h2>Users</h2>
+                        <div class="card p-3">
+                            <table class="table table-dark">
+                                <thead>
+                                    <tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Actions</th></tr>
+                                </thead>
+                                <tbody id="usersTableBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Course Modal -->
+    <div class="modal fade" id="courseModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title text-info">Course</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="courseForm">
+                        <input type="hidden" id="courseId">
+                        <div class="mb-3">
+                            <label for="courseTitle" class="form-label">Title</label>
+                            <input type="text" class="form-control" id="courseTitle" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="courseDescription" class="form-label">Description</label>
+                            <textarea class="form-control" id="courseDescription" rows="3" required></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="coursePrice" class="form-label">Price ($)</label>
+                            <input type="number" step="0.01" class="form-control" id="coursePrice" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="courseDiscount" class="form-label">Discount (%)</label>
+                            <input type="number" step="0.01" class="form-control" id="courseDiscount">
+                        </div>
+                        <div class="mb-3">
+                            <label for="courseThumbnail" class="form-label">Thumbnail URL</label>
+                            <input type="url" class="form-control" id="courseThumbnail">
+                        </div>
+                        <button type="submit" class="btn btn-neon">Save</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Software Modal -->
+    <div class="modal fade" id="softwareModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title text-info">Software</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="softwareForm">
+                        <input type="hidden" id="softwareId">
+                        <div class="mb-3">
+                            <label for="softwareTitle" class="form-label">Title</label>
+                            <input type="text" class="form-control" id="softwareTitle" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="softwareDescription" class="form-label">Description</label>
+                            <textarea class="form-control" id="softwareDescription" rows="3" required></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="softwarePrice" class="form-label">Price ($)</label>
+                            <input type="number" step="0.01" class="form-control" id="softwarePrice" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="softwareVersion" class="form-label">Version</label>
+                            <input type="text" class="form-control" id="softwareVersion" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="softwareLicenseType" class="form-label">License Type</label>
+                            <select class="form-select" id="softwareLicenseType">
+                                <option value="single">Single</option>
+                                <option value="multi">Multi</option>
+                                <option value="unlimited">Unlimited</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="softwareFile" class="form-label">Software File</label>
+                            <input type="file" class="form-control" id="softwareFile">
+                        </div>
+                        <button type="submit" class="btn btn-neon">Save</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Modal -->
+    <div class="modal fade" id="userModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title text-info">Edit User</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="userForm">
+                        <input type="hidden" id="userId">
+                        <div class="mb-3">
+                            <label for="userName" class="form-label">Name</label>
+                            <input type="text" class="form-control" id="userName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="userEmail" class="form-label">Email</label>
+                            <input type="email" class="form-control" id="userEmail" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="userRole" class="form-label">Role</label>
+                            <select class="form-select" id="userRole">
+                                <option value="user">User</option>
+                                <option value="admin">Admin</option>
+                                <option value="super_admin">Super Admin</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-neon">Save</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- The main script is already module type above -->
+</body>
+</html>

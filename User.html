@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SaaS Platform</title>
+    <!-- Bootstrap 5 Dark Theme -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, sendEmailVerification } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+        import { getFirestore, collection, doc, getDoc, getDocs, addDoc, query, where, orderBy, Timestamp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+        // Firebase config (same as admin)
+        const firebaseConfig = {
+            apiKey: "AIzaSyDmwtPoZuKgEBc_lgIDMoBHF1ZwObhAnl8",
+            authDomain: "phunlocker-c6fc4.firebaseapp.com",
+            projectId: "phunlocker-c6fc4",
+            storageBucket: "phunlocker-c6fc4.firebasestorage.app",
+            messagingSenderId: "616452799409",
+            appId: "1:616452799409:web:2bbb5fb74c96cbbb571b90"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        let currentUser = null;
+        let currentUserData = null;
+
+        // DOM elements
+        const publicContainer = document.getElementById('publicContainer');
+        const authContainer = document.getElementById('authContainer');
+        const dashboardContainer = document.getElementById('dashboardContainer');
+        const loginForm = document.getElementById('loginForm');
+        const registerForm = document.getElementById('registerForm');
+        const logoutBtn = document.getElementById('logoutBtn');
+        const authError = document.getElementById('authError');
+        const regError = document.getElementById('regError');
+        const navLinks = document.querySelectorAll('.nav-link[data-page]');
+        const pages = document.querySelectorAll('.page');
+
+        // Check auth state
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                if (user.emailVerified) {
+                    currentUser = user;
+                    // Fetch user data from Firestore
+                    const userDoc = await getDoc(doc(db, 'users', user.uid));
+                    if (userDoc.exists()) {
+                        currentUserData = userDoc.data();
+                    } else {
+                        // Create user doc if not exists (should have been created on registration)
+                        const userData = {
+                            name: user.displayName || '',
+                            email: user.email,
+                            role: 'user',
+                            createdAt: Timestamp.now()
+                        };
+                        await setDoc(doc(db, 'users', user.uid), userData);
+                        currentUserData = userData;
+                    }
+                    showDashboard();
+                } else {
+                    // Email not verified, show verification notice
+                    showAuthPage('verify');
+                }
+            } else {
+                showPublic();
+            }
+        });
+
+        function showPublic() {
+            publicContainer.style.display = 'block';
+            authContainer.style.display = 'none';
+            dashboardContainer.style.display = 'none';
+        }
+
+        function showAuthPage(page = 'login') {
+            publicContainer.style.display = 'none';
+            authContainer.style.display = 'block';
+            dashboardContainer.style.display = 'none';
+            document.getElementById('loginPage').style.display = page === 'login' ? 'block' : 'none';
+            document.getElementById('registerPage').style.display = page === 'register' ? 'block' : 'none';
+            document.getElementById('verifyPage').style.display = page === 'verify' ? 'block' : 'none';
+        }
+
+        function showDashboard() {
+            publicContainer.style.display = 'none';
+            authContainer.style.display = 'none';
+            dashboardContainer.style.display = 'block';
+            // Load default dashboard section
+            showPage('dashboard');
+            loadDashboardData();
+        }
+
+        // Navigation in dashboard
+        navLinks.forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const page = link.dataset.page;
+                showPage(page);
+            });
+        });
+
+        function showPage(pageId) {
+            pages.forEach(p => p.style.display = 'none');
+            document.getElementById(`page-${pageId}`).style.display = 'block';
+            navLinks.forEach(l => l.classList.remove('active'));
+            document.querySelector(`.nav-link[data-page="${pageId}"]`).classList.add('active');
+            // Load data if needed
+            if (pageId === 'courses') loadMyCourses();
+            if (pageId === 'software') loadMySoftware();
+            if (pageId === 'storeCourses') loadStoreCourses();
+            if (pageId === 'storeSoftware') loadStoreSoftware();
+        }
+
+        // ==================== AUTH ====================
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+            } catch (error) {
+                authError.textContent = error.message;
+            }
+        });
+
+        registerForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('regName').value;
+            const email = document.getElementById('regEmail').value;
+            const password = document.getElementById('regPassword').value;
+            const phone = document.getElementById('regPhone').value;
+            try {
+                const userCred = await createUserWithEmailAndPassword(auth, email, password);
+                // Send verification email
+                await sendEmailVerification(userCred.user);
+                // Save user data to Firestore
+                await setDoc(doc(db, 'users', userCred.user.uid), {
+                    name: name,
+                    email: email,
+                    phone: phone,
+                    role: 'user',
+                    createdAt: Timestamp.now()
+                });
+                showAuthPage('verify');
+            } catch (error) {
+                regError.textContent = error.message;
+            }
+        });
+
+        document.getElementById('goToLogin').addEventListener('click', (e) => {
+            e.preventDefault();
+            showAuthPage('login');
+        });
+
+        document.getElementById('goToRegister').addEventListener('click', (e) => {
+            e.preventDefault();
+            showAuthPage('register');
+        });
+
+        document.getElementById('resendVerification').addEventListener('click', async () => {
+            if (auth.currentUser) {
+                await sendEmailVerification(auth.currentUser);
+                alert('Verification email sent!');
+            }
+        });
+
+        logoutBtn.addEventListener('click', async () => {
+            await signOut(auth);
+        });
+
+        // ==================== DASHBOARD ====================
+        async function loadDashboardData() {
+            // Get enrolled courses count
+            const licensesQuery = query(collection(db, 'licenses'), where('userId', '==', currentUser.uid), where('productType', '==', 'course'));
+            const courseLicenses = await getDocs(licensesQuery);
+            document.getElementById('enrolledCoursesCount').textContent = courseLicenses.size;
+
+            const softwareLicenses = query(collection(db, 'licenses'), where('userId', '==', currentUser.uid), where('productType', '==', 'software'));
+            const softwareLicensesSnap = await getDocs(softwareLicenses);
+            document.getElementById('softwareCount').textContent = softwareLicensesSnap.size;
+
+            // Recent orders
+            const ordersQuery = query(collection(db, 'orders'), where('userId', '==', currentUser.uid), orderBy('createdAt', 'desc'), limit(5));
+            const ordersSnap = await getDocs(ordersQuery);
+            const ordersHtml = ordersSnap.docs.map(doc => {
+                const data = doc.data();
+                return `<tr>
+                    <td>${doc.id}</td>
+                    <td>$${data.total.toFixed(2)}</td>
+                    <td>${data.status}</td>
+                    <td>${data.createdAt.toDate().toLocaleDateString()}</td>
+                </tr>`;
+            }).join('');
+            document.getElementById('recentOrdersBody').innerHTML = ordersHtml;
+        }
+
+        // ==================== MY COURSES ====================
+        async function loadMyCourses() {
+            const licensesQuery = query(collection(db, 'licenses'), where('userId', '==', currentUser.uid), where('productType', '==', 'course'));
+            const licensesSnap = await getDocs(licensesQuery);
+            const courseIds = licensesSnap.docs.map(d => d.data().productId);
+            const courses = [];
+            for (const id of courseIds) {
+                const courseDoc = await getDoc(doc(db, 'courses', id));
+                if (courseDoc.exists()) courses.push({ id: courseDoc.id, ...courseDoc.data() });
+            }
+            const coursesHtml = courses.map(c => `
+                <div class="col-md-4 mb-3">
+                    <div class="card p-3">
+                        <img src="${c.thumbnail || 'https://via.placeholder.com/300x200'}" class="card-img-top" alt="${c.title}">
+                        <div class="card-body">
+                            <h5 class="card-title text-info">${c.title}</h5>
+                            <p class="card-text">${c.description.substring(0, 100)}...</p>
+                            <a href="#" onclick="playCourse('${c.id}')" class="btn btn-neon">Play</a>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+            document.getElementById('myCoursesList').innerHTML = coursesHtml || '<p>No courses yet.</p>';
+        }
+
+        window.playCourse = (courseId) => {
+            // Load course player
+            showPage('player');
+            loadCoursePlayer(courseId);
+        };
+
+        async function loadCoursePlayer(courseId) {
+            const courseDoc = await getDoc(doc(db, 'courses', courseId));
+            if (courseDoc.exists()) {
+                const course = courseDoc.data();
+                document.getElementById('playerTitle').textContent = course.title;
+                // For simplicity, embed a sample video
+                document.getElementById('playerVideo').innerHTML = `
+                    <video controls style="width:100%; max-height:500px;">
+                        <source src="${course.videoUrl || 'https://www.w3schools.com/html/mov_bbb.mp4'}" type="video/mp4">
+                    </video>
+                `;
+                // Load modules (if any)
+                const modulesQuery = query(collection(db, 'modules'), where('courseId', '==', courseId), orderBy('order'));
+                const modulesSnap = await getDocs(modulesQuery);
+                const modulesHtml = modulesSnap.docs.map(m => `
+                    <li class="list-group-item bg-dark text-light">
+                        <a href="#" onclick="playModule('${m.id}')">${m.data().title}</a>
+                    </li>
+                `).join('');
+                document.getElementById('playerModules').innerHTML = modulesHtml || '<li class="list-group-item bg-dark text-light">No modules</li>';
+            }
+        }
+
+        // ==================== MY SOFTWARE ====================
+        async function loadMySoftware() {
+            const licensesQuery = query(collection(db, 'licenses'), where('userId', '==', currentUser.uid), where('productType', '==', 'software'));
+            const licensesSnap = await getDocs(licensesQuery);
+            const softwareIds = licensesSnap.docs.map(d => d.data().productId);
+            const softwareList = [];
+            for (const id of softwareIds) {
+                const softDoc = await getDoc(doc(db, 'software', id));
+                if (softDoc.exists()) softwareList.push({ id: softDoc.id, ...softDoc.data() });
+            }
+            const softwareHtml = softwareList.map(s => `
+                <div class="col-md-4 mb-3">
+                    <div class="card p-3">
+                        <h5 class="card-title text-info">${s.title}</h5>
+                        <p>Version: ${s.version}</p>
+                        <a href="${s.fileURL}" class="btn btn-neon" download>Download</a>
+                    </div>
+                </div>
+            `).join('');
+            document.getElementById('mySoftwareList').innerHTML = softwareHtml || '<p>No software yet.</p>';
+        }
+
+        // ==================== STORE ====================
+        async function loadStoreCourses() {
+            const coursesSnap = await getDocs(collection(db, 'courses'));
+            const coursesHtml = coursesSnap.docs.map(doc => {
+                const data = doc.data();
+                return `
+                    <div class="col-md-4 mb-3">
+                        <div class="card p-3">
+                            <img src="${data.thumbnail || 'https://via.placeholder.com/300x200'}" class="card-img-top">
+                            <div class="card-body">
+                                <h5 class="card-title text-info">${data.title}</h5>
+                                <p class="card-text">$${data.price}</p>
+                                <button class="btn btn-neon" onclick="buyCourse('${doc.id}')">Buy</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            document.getElementById('storeCoursesList').innerHTML = coursesHtml;
+        }
+
+        window.buyCourse = async (courseId) => {
+            if (!currentUser) {
+                showAuthPage('login');
+                return;
+            }
+            // Create order with status pending
+            const courseDoc = await getDoc(doc(db, 'courses', courseId));
+            const course = courseDoc.data();
+            const orderData = {
+                userId: currentUser.uid,
+                items: [{ type: 'course', id: courseId, price: course.price }],
+                total: course.price,
+                status: 'pending',
+                createdAt: Timestamp.now()
+            };
+            await addDoc(collection(db, 'orders'), orderData);
+            alert('Order placed! Awaiting admin approval.');
+        };
+
+        async function loadStoreSoftware() {
+            const softwareSnap = await getDocs(collection(db, 'software'));
+            const softwareHtml = softwareSnap.docs.map(doc => {
+                const data = doc.data();
+                return `
+                    <div class="col-md-4 mb-3">
+                        <div class="card p-3">
+                            <h5 class="card-title text-info">${data.title}</h5>
+                            <p>$${data.price} | Version ${data.version}</p>
+                            <button class="btn btn-neon" onclick="buySoftware('${doc.id}')">Buy</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            document.getElementById('storeSoftwareList').innerHTML = softwareHtml;
+        }
+
+        window.buySoftware = async (softwareId) => {
+            if (!currentUser) {
+                showAuthPage('login');
+                return;
+            }
+            const softDoc = await getDoc(doc(db, 'software', softwareId));
+            const soft = softDoc.data();
+            const orderData = {
+                userId: currentUser.uid,
+                items: [{ type: 'software', id: softwareId, price: soft.price }],
+                total: soft.price,
+                status: 'pending',
+                createdAt: Timestamp.now()
+            };
+            await addDoc(collection(db, 'orders'), orderData);
+            alert('Order placed! Awaiting admin approval.');
+        };
+
+        // ==================== PROFILE ====================
+        async function loadProfile() {
+            document.getElementById('profileName').value = currentUserData.name || '';
+            document.getElementById('profileEmail').value = currentUserData.email || '';
+            document.getElementById('profilePhone').value = currentUserData.phone || '';
+        }
+
+        document.getElementById('profileForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const name = document.getElementById('profileName').value;
+            const phone = document.getElementById('profilePhone').value;
+            await updateDoc(doc(db, 'users', currentUser.uid), { name, phone });
+            alert('Profile updated');
+            currentUserData.name = name;
+            currentUserData.phone = phone;
+        });
+
+        // Expose functions globally
+        window.showPage = showPage;
+        window.playCourse = playCourse;
+        window.buyCourse = buyCourse;
+        window.buySoftware = buySoftware;
+    </script>
+    <style>
+        body {
+            background: #0a0e1a;
+            color: #e0e0e0;
+            font-family: 'Inter', sans-serif;
+        }
+        .navbar {
+            background: #141b2b;
+        }
+        .navbar-brand, .nav-link {
+            color: #b0b7c4 !important;
+        }
+        .nav-link:hover, .nav-link.active {
+            color: #00e5ff !important;
+        }
+        .btn-neon {
+            background: transparent;
+            border: 1px solid #00e5ff;
+            color: #00e5ff;
+        }
+        .btn-neon:hover {
+            background: #00e5ff;
+            color: #0a0e1a;
+        }
+        .card {
+            background: #1f2a40;
+            border: none;
+            border-radius: 10px;
+        }
+        .card-title {
+            color: #00e5ff;
+        }
+        .auth-card {
+            background: #141b2b;
+            border: 1px solid #2a3a5a;
+            border-radius: 15px;
+            max-width: 400px;
+            margin: 50px auto;
+            padding: 30px;
+        }
+        .form-control {
+            background: #1f2a40;
+            border: 1px solid #2a3a5a;
+            color: #fff;
+        }
+        .form-control:focus {
+            background: #1f2a40;
+            border-color: #00e5ff;
+            box-shadow: 0 0 0 0.2rem rgba(0,229,255,0.25);
+        }
+        .sidebar {
+            background: #141b2b;
+            min-height: 100vh;
+        }
+        .sidebar a {
+            color: #b0b7c4;
+            text-decoration: none;
+            padding: 12px 20px;
+            display: block;
+        }
+        .sidebar a:hover, .sidebar a.active {
+            background: #1f2a40;
+            color: #00e5ff;
+        }
+        #publicContainer .hero {
+            padding: 100px 0;
+            text-align: center;
+        }
+        .hero h1 {
+            color: #00e5ff;
+            font-size: 3rem;
+        }
+        .footer {
+            background: #141b2b;
+            padding: 30px 0;
+            margin-top: 50px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Public Container (Home, Courses, Software, Pricing, etc.) -->
+    <div id="publicContainer">
+        <nav class="navbar navbar-expand-lg navbar-dark">
+            <div class="container">
+                <a class="navbar-brand text-info" href="#">SaaS</a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarPublic">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse" id="navbarPublic">
+                    <ul class="navbar-nav ms-auto">
+                        <li class="nav-item"><a class="nav-link" href="#" onclick="showPublicPage('home')">Home</a></li>
+                        <li class="nav-item"><a class="nav-link" href="#" onclick="showPublicPage('courses')">Courses</a></li>
+                        <li class="nav-item"><a class="nav-link" href="#" onclick="showPublicPage('software')">Software</a></li>
+                        <li class="nav-item"><a class="nav-link" href="#" onclick="showPublicPage('pricing')">Pricing</a></li>
+                        <li class="nav-item"><a class="nav-link" href="#" onclick="showPublicPage('about')">About</a></li>
+                        <li class="nav-item"><a class="nav-link" href="#" onclick="showPublicPage('contact')">Contact</a></li>
+                        <li class="nav-item"><a class="nav-link btn-neon" href="#" onclick="showAuthPage('login')">Login</a></li>
+                        <li class="nav-item"><a class="nav-link btn-neon" href="#" onclick="showAuthPage('register')">Register</a></li>
+                    </ul>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Public Pages (simplified, just placeholders) -->
+        <div id="publicHome" class="public-page" style="display: block;">
+            <section class="hero">
+                <div class="container">
+                    <h1>Master Digital Skills & Software</h1>
+                    <p class="lead">Access premium courses and powerful software tools.</p>
+                    <a href="#" onclick="showAuthPage('register')" class="btn btn-neon btn-lg mt-3">Get Started</a>
+                </div>
+            </section>
+            <section class="features py-5">
+                <div class="container">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="card p-4 text-center">
+                                <h3 class="text-info">Courses</h3>
+                                <p>Learn from industry experts.</p>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card p-4 text-center">
+                                <h3 class="text-info">Software</h3>
+                                <p>Download licensed software.</p>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card p-4 text-center">
+                                <h3 class="text-info">Community</h3>
+                                <p>Join a community of learners.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+        <!-- Other public pages would go here; for brevity, we'll just show home -->
+    </div>
+
+    <!-- Auth Container -->
+    <div id="authContainer" style="display: none;">
+        <div class="auth-card">
+            <!-- Login Page -->
+            <div id="loginPage">
+                <h2 class="text-center text-info mb-4">Login</h2>
+                <form id="loginForm">
+                    <div class="mb-3">
+                        <label for="loginEmail" class="form-label">Email</label>
+                        <input type="email" class="form-control" id="loginEmail" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="loginPassword" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="loginPassword" required>
+                    </div>
+                    <div id="authError" class="text-danger mb-2"></div>
+                    <button type="submit" class="btn btn-neon w-100">Login</button>
+                    <p class="mt-3 text-center">Don't have an account? <a href="#" id="goToRegister">Register</a></p>
+                </form>
+            </div>
+            <!-- Register Page -->
+            <div id="registerPage" style="display: none;">
+                <h2 class="text-center text-info mb-4">Register</h2>
+                <form id="registerForm">
+                    <div class="mb-3">
+                        <label for="regName" class="form-label">Name</label>
+                        <input type="text" class="form-control" id="regName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="regEmail" class="form-label">Email</label>
+                        <input type="email" class="form-control" id="regEmail" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="regPassword" class="form-label">Password</label>
+                        <input type="password" class="form-control" id="regPassword" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="regPhone" class="form-label">Phone</label>
+                        <input type="text" class="form-control" id="regPhone">
+                    </div>
+                    <div id="regError" class="text-danger mb-2"></div>
+                    <button type="submit" class="btn btn-neon w-100">Register</button>
+                    <p class="mt-3 text-center">Already have an account? <a href="#" id="goToLogin">Login</a></p>
+                </form>
+            </div>
+            <!-- Verify Email Page -->
+            <div id="verifyPage" style="display: none;">
+                <h2 class="text-center text-info mb-4">Verify Your Email</h2>
+                <p class="text-center">A verification link has been sent to your email. Please verify to continue.</p>
+                <button class="btn btn-neon w-100" id="resendVerification">Resend Verification</button>
+                <p class="mt-3 text-center"><a href="#" onclick="logout()">Logout</a></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Dashboard Container -->
+    <div id="dashboardContainer" style="display: none;">
+        <div class="container-fluid">
+            <div class="row">
+                <!-- Sidebar -->
+                <div class="col-md-2 p-0 sidebar">
+                    <div class="p-3">
+                        <h4 class="text-center text-info">Dashboard</h4>
+                    </div>
+                    <nav class="nav flex-column">
+                        <a class="nav-link" href="#" data-page="dashboard"><i class="fas fa-tachometer-alt me-2"></i>Dashboard</a>
+                        <a class="nav-link" href="#" data-page="courses"><i class="fas fa-book me-2"></i>My Courses</a>
+                        <a class="nav-link" href="#" data-page="software"><i class="fas fa-code me-2"></i>My Software</a>
+                        <a class="nav-link" href="#" data-page="storeCourses"><i class="fas fa-shopping-cart me-2"></i>Course Store</a>
+                        <a class="nav-link" href="#" data-page="storeSoftware"><i class="fas fa-download me-2"></i>Software Store</a>
+                        <a class="nav-link" href="#" data-page="profile"><i class="fas fa-user me-2"></i>Profile</a>
+                        <a class="nav-link" href="#" id="logoutBtn"><i class="fas fa-sign-out-alt me-2"></i>Logout</a>
+                    </nav>
+                </div>
+                <!-- Main Content -->
+                <div class="col-md-10 p-4">
+                    <!-- Dashboard Page -->
+                    <div id="page-dashboard" class="page" style="display: none;">
+                        <h2>Dashboard</h2>
+                        <div class="row mt-4">
+                            <div class="col-md-6">
+                                <div class="card p-3">
+                                    <h5>Enrolled Courses</h5>
+                                    <p class="display-6" id="enrolledCoursesCount">0</p>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="card p-3">
+                                    <h5>Software Licenses</h5>
+                                    <p class="display-6" id="softwareCount">0</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row mt-4">
+                            <div class="col-md-12">
+                                <div class="card p-3">
+                                    <h5>Recent Orders</h5>
+                                    <table class="table table-dark">
+                                        <thead><tr><th>Order ID</th><th>Total</th><th>Status</th><th>Date</th></tr></thead>
+                                        <tbody id="recentOrdersBody"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- My Courses Page -->
+                    <div id="page-courses" class="page" style="display: none;">
+                        <h2>My Courses</h2>
+                        <div class="row" id="myCoursesList"></div>
+                    </div>
+
+                    <!-- My Software Page -->
+                    <div id="page-software" class="page" style="display: none;">
+                        <h2>My Software</h2>
+                        <div class="row" id="mySoftwareList"></div>
+                    </div>
+
+                    <!-- Course Store Page -->
+                    <div id="page-storeCourses" class="page" style="display: none;">
+                        <h2>Course Store</h2>
+                        <div class="row" id="storeCoursesList"></div>
+                    </div>
+
+                    <!-- Software Store Page -->
+                    <div id="page-storeSoftware" class="page" style="display: none;">
+                        <h2>Software Store</h2>
+                        <div class="row" id="storeSoftwareList"></div>
+                    </div>
+
+                    <!-- Profile Page -->
+                    <div id="page-profile" class="page" style="display: none;">
+                        <h2>Profile</h2>
+                        <div class="card p-4">
+                            <form id="profileForm">
+                                <div class="mb-3">
+                                    <label for="profileName" class="form-label">Name</label>
+                                    <input type="text" class="form-control" id="profileName" required>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="profileEmail" class="form-label">Email</label>
+                                    <input type="email" class="form-control" id="profileEmail" readonly>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="profilePhone" class="form-label">Phone</label>
+                                    <input type="text" class="form-control" id="profilePhone">
+                                </div>
+                                <button type="submit" class="btn btn-neon">Update</button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Course Player Page (hidden by default) -->
+                    <div id="page-player" class="page" style="display: none;">
+                        <h2 id="playerTitle"></h2>
+                        <div class="row">
+                            <div class="col-md-8">
+                                <div id="playerVideo"></div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card p-3">
+                                    <h5>Modules</h5>
+                                    <ul class="list-group" id="playerModules"></ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Additional inline script for public page navigation -->
+    <script>
+        function showPublicPage(page) {
+            // Hide all public pages, show selected
+            document.querySelectorAll('.public-page').forEach(p => p.style.display = 'none');
+            document.getElementById('publicHome').style.display = 'block'; // simplified
+        }
+        function showAuthPage(page) {
+            document.getElementById('publicContainer').style.display = 'none';
+            document.getElementById('authContainer').style.display = 'block';
+            document.getElementById('dashboardContainer').style.display = 'none';
+            document.getElementById('loginPage').style.display = page === 'login' ? 'block' : 'none';
+            document.getElementById('registerPage').style.display = page === 'register' ? 'block' : 'none';
+            document.getElementById('verifyPage').style.display = page === 'verify' ? 'block' : 'none';
+        }
+        function logout() {
+            // Call Firebase signOut
+            import('https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js').then(({ getAuth, signOut }) => {
+                const auth = getAuth();
+                signOut(auth);
+            });
+        }
+    </script>
+</body>
+</html>
